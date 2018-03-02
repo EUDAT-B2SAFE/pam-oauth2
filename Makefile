@@ -9,7 +9,7 @@ jsmn/libjsmn.a:
 	$(MAKE) CFLAGS="$(CFLAGS)" -C jsmn
 
 pam_oauth2.so: pam_oauth2.o jsmn/libjsmn.a
-	$(CC) -shared $^ -lcurl -o $@
+	$(CC) -shared $^ -lcurl -lconfig -o $@
 
 install: pam_oauth2.so
 	if ! test -d $(DEST); then mkdir $(DEST); fi

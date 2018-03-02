@@ -4,6 +4,7 @@
 #include <curl/curl.h>
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
+#include <libconfig.h>
 #include "jsmn/jsmn.h"
 
 struct response {
@@ -130,9 +131,12 @@ static int check_response(const struct response token_info, struct check_tokens 
     return r;
 }
 
-static int query_token_info(const char * const tokeninfo_url, const char * const authtok, long *response_code, struct response *token_info) {
+static int query_token_info(const char * const tokeninfo_url, const char * const authtok, 
+                            const char * const client_username, const char * const client_password,
+                            long *response_code, struct response *token_info) {
     int ret = 1;
     char *url;
+    CURLcode res;
     CURL *session = curl_easy_init();
 
     if (!session) {
@@ -140,21 +144,37 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
         return ret;
     }
 
+    char* pUserPass;
+    char* postData;
+    int len = strlen(client_username) + strlen(client_password) + 2; 
+    pUserPass = malloc(len);
+    sprintf(pUserPass, "%s:%s", client_username, client_password);
+
     if ((url = malloc(strlen(tokeninfo_url) + strlen(authtok) + 1))) {
         strcpy(url, tokeninfo_url);
         strcat(url, authtok);
+       
+        postData = malloc(strlen("token=") + strlen(authtok) + 1);
+        postData = strcpy(postData, "token=");
+        strcat(postData, authtok);
 
-        curl_easy_setopt(session, CURLOPT_URL, url);
+        curl_easy_setopt(session, CURLOPT_URL, tokeninfo_url);
+        curl_easy_setopt(session, CURLOPT_VERBOSE, 1L);
+        curl_easy_setopt(session, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(session, CURLOPT_USERPWD, pUserPass);
         curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, writefunc);
         curl_easy_setopt(session, CURLOPT_WRITEDATA, token_info);
-
-        if (curl_easy_perform(session) == CURLE_OK &&
+        curl_easy_setopt(session, CURLOPT_POSTFIELDS, postData);
+        
+        res = curl_easy_perform(session);
+        if (res == CURLE_OK &&
                 curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, response_code) == CURLE_OK) {
             ret = 0;
         } else {
-            syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: failed to perform curl request");
+            syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: curl request failed: %s\n", curl_easy_strerror(res));
         }
  
+        free(postData);
         free(url);
     } else {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
@@ -165,7 +185,9 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     return ret;
 }
 
-static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authtok, struct check_tokens *ct) {
+static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authtok, 
+                               struct check_tokens *ct, const char * const client_username, 
+                               const char * const client_password) {
     struct response token_info;
     long response_code = 0;
     int ret;
@@ -176,7 +198,8 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     }
     token_info.ptr[token_info.len = 0] = '\0';
 
-    if (query_token_info(tokeninfo_url, authtok, &response_code, &token_info) != 0) {
+    if (query_token_info(tokeninfo_url, authtok, client_username, client_password, 
+                         &response_code, &token_info) != 0) {
         ret = PAM_AUTHINFO_UNAVAIL;
     } else if (response_code == 200) {
         ret = check_response(token_info, ct);
@@ -191,13 +214,74 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    const char *tokeninfo_url = NULL, *authtok = NULL;
+    const char *tokeninfo_url = NULL, *authtok = NULL; 
+    const char *username_attribute = NULL;
+    const char *client_username = NULL, *client_password = NULL;
     struct check_tokens ct[argc];
     int i, ct_len = 1;
     ct->key = ct->value = NULL;
+    config_t cfg, *cf;
+    config_setting_t *setting;
+    const char *config_path;
+    const char *token_validation_ep;
+    const char *login_field;
+    const char *oauth2_client_username;
+    const char *oauth2_client_password;
 
-    if (argc > 0) tokeninfo_url = argv[0];
-    if (argc > 1) ct[0].key = argv[1];
+    if (argc > 0) config_path = argv[0];    
+
+    cf = &cfg;
+    config_init(cf);
+    /* Read the file. If there is an error, report it and exit. */
+    if(! config_read_file(cf, config_path)) {
+        syslog(LOG_AUTH|LOG_DEBUG, "%s:%d - %s\n", config_error_file(cf),
+               config_error_line(cf), config_error_text(cf));
+        config_destroy(cf);
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+
+    if(config_lookup_string(cf, "token_validation_ep", &token_validation_ep)) {
+        tokeninfo_url = malloc(strlen(token_validation_ep) + 1);
+        strcpy(tokeninfo_url, token_validation_ep);
+        syslog(LOG_AUTH|LOG_DEBUG, "Token validation EP: %s\n\n", tokeninfo_url);
+    }
+    else {
+        syslog(LOG_AUTH|LOG_DEBUG, "No 'token_validation_ep' setting in configuration file.\n");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+    if(config_lookup_string(cf, "login_field", &login_field)) {
+        username_attribute = malloc(strlen(login_field) + 1);
+        strcpy(username_attribute, login_field);
+        syslog(LOG_AUTH|LOG_DEBUG, "username_attribute: %s\n\n", username_attribute);
+    }
+    else {
+        syslog(LOG_AUTH|LOG_DEBUG, "No 'username_attribute' setting in configuration file.\n");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+    if(config_lookup_string(cf, "oauth2_client_username", &oauth2_client_username)) {
+        client_username = malloc(strlen(oauth2_client_username) + 1);
+        strcpy(client_username, oauth2_client_username);
+        syslog(LOG_AUTH|LOG_DEBUG, "client_username: %s\n\n", client_username);
+    }
+    else {
+        syslog(LOG_AUTH|LOG_DEBUG, "No 'client_username' setting in configuration file.\n");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+    if(config_lookup_string(cf, "oauth2_client_password", &oauth2_client_password)) {
+        client_password = malloc(strlen(oauth2_client_password) + 1);
+        strcpy(client_password, oauth2_client_password);
+        syslog(LOG_AUTH|LOG_DEBUG, "client_password: %s\n\n", client_password);
+    }
+    else {
+        syslog(LOG_AUTH|LOG_DEBUG, "No 'client_password' setting in configuration file.\n");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+    
+    config_destroy(cf);
+
+/*    if (argc > 0) tokeninfo_url = argv[0]; */
+/*    if (argc > 1) ct[0].key = argv[1]; */
+    ct[0].key = username_attribute;
 
     if (tokeninfo_url == NULL || *tokeninfo_url == '\0') {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: tokeninfo_url is not defined or invalid");
@@ -235,7 +319,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     }
     ct[ct_len].key = NULL;
 
-    return oauth2_authenticate(tokeninfo_url, authtok, ct);
+    return oauth2_authenticate(tokeninfo_url, authtok, ct, client_username, client_password);
 }
 
 PAM_EXTERN int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv) {
