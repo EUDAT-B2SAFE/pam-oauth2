@@ -62,7 +62,7 @@ If the response code is not 200 - authentication will fail. After that it will c
 It will check that response is a valid JSON object and top-level object contains following key-value pairs:
 ```json
   "scope": "foo",
-  "grp": "tester"
+  "active": "true"
 ```
 
 If some keys haven't been found or values don't match with expectation - authentication will fail.
