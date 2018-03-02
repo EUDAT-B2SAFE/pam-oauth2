@@ -72,10 +72,10 @@ If some keys haven't been found or values don't match with expectation - authent
 iRODS (www.irods.org) supports PAM authentication (https://docs.irods.org/4.2.1/plugins/pluggable_authentication/).  
 It is possible to enable the OAuth2 authentication in iRODS in this way:
 * the user get a valid OAuth2 token from an independent tool (web portal, http API, etc.)
-* then she login via command line usign PAM iRODS configuration and passing the token string as password.
+* then she login via command line using PAM iRODS configuration and passing the token string as password.
 * if the aforementioned PAM module is correctly configured in /etc/pam.d/irods, then the user can be authenticated.  
   
-This PAM module is just a Proof of Concept and it has been tested on a CENTOS 7 with iRODS v4.2.1 and WO2 Identity provider v5.4.1 (https://wso2.com/identity-and-access-management), in particular using the steps described here: https://docs.wso2.com/display/IS530/Invoke+the+OAuth+Introspection+Endpoint to invoke the introspection endpoint with a scope:
+This PAM module is just a Proof of Concept and it has been tested on a CENTOS 7 with iRODS v4.2.1 and WSO2 Identity provider v5.4.1 (https://wso2.com/identity-and-access-management), in particular using the steps described here: https://docs.wso2.com/display/IS530/Invoke+the+OAuth+Introspection+Endpoint to invoke the introspection endpoint with a scope:
 
 ```
 $ curl -v -X POST --basic -u nrlRYuk3JrEAlwMG8B8Y2pbaPi0a:8YDugo0txFVczgAjSIPkwvR_32ka -H 'Content-Type: application/x-www-form-urlencoded;charset=UTF-8' -k -d 'grant_type=client_credentials&scope=claudio' https://localhost:9443/oauth2/token
