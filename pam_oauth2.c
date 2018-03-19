@@ -6,6 +6,7 @@
 #include <security/pam_ext.h>
 #include <libconfig.h>
 #include "jsmn/jsmn.h"
+#include "parson/parson.h"
 
 struct response {
     char *ptr;
@@ -135,7 +136,6 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
                             const char * const client_username, const char * const client_password,
                             long *response_code, struct response *token_info) {
     int ret = 1;
-    char *url;
     CURLcode res;
     CURL *session = curl_easy_init();
 
@@ -150,11 +150,7 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     pUserPass = malloc(len);
     sprintf(pUserPass, "%s:%s", client_username, client_password);
 
-    if ((url = malloc(strlen(tokeninfo_url) + strlen(authtok) + 1))) {
-        strcpy(url, tokeninfo_url);
-        strcat(url, authtok);
-       
-        postData = malloc(strlen("token=") + strlen(authtok) + 1);
+    if ((postData = malloc(strlen("token=") + strlen(authtok) + 1))) {
         postData = strcpy(postData, "token=");
         strcat(postData, authtok);
 
@@ -175,7 +171,6 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
         }
  
         free(postData);
-        free(url);
     } else {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
     }
@@ -213,20 +208,37 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     return ret;
 }
 
+static char* get_mapped_user(const char* filename, const char *user_key) {
+    const char *name = NULL;
+    char *username = NULL;
+
+    syslog(LOG_AUTH|LOG_DEBUG, "Searching for user: %s\n\n", user_key);
+    JSON_Value *user_map = json_parse_file(filename);
+    name = json_object_get_string(json_object(user_map), user_key);
+    syslog(LOG_AUTH|LOG_DEBUG, "Mapped user: %s\n\n", name);
+    username = malloc(strlen(name) + 1);
+    strcpy(username, name);
+    json_value_free(user_map);
+
+    return username;
+}
+
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    const char *tokeninfo_url = NULL, *authtok = NULL; 
-    const char *username_attribute = NULL;
-    const char *client_username = NULL, *client_password = NULL;
+    const char *authtok = NULL;
+    char *tokeninfo_url = NULL; 
+    char *username_attribute = NULL;
+    char *client_username = NULL, *client_password = NULL;
+    char *user_map_path = NULL, *global_user_name = NULL;
     struct check_tokens ct[argc];
     int i, ct_len = 1;
     ct->key = ct->value = NULL;
     config_t cfg, *cf;
-    config_setting_t *setting;
     const char *config_path;
     const char *token_validation_ep;
     const char *login_field;
     const char *oauth2_client_username;
     const char *oauth2_client_password;
+    const char *user_map_file;
 
     if (argc > 0) config_path = argv[0];    
 
@@ -276,6 +288,15 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
         syslog(LOG_AUTH|LOG_DEBUG, "No 'client_password' setting in configuration file.\n");
         return PAM_AUTHINFO_UNAVAIL;
     }
+    if(config_lookup_string(cf, "user_map_file", &user_map_file)) {
+        user_map_path = malloc(strlen(user_map_file) + 1);
+        strcpy(user_map_path, user_map_file);
+        syslog(LOG_AUTH|LOG_DEBUG, "user_map_path: %s\n\n", user_map_path);
+    }
+    else {
+        user_map_path = NULL;
+        syslog(LOG_AUTH|LOG_DEBUG, "No 'user_map_file' setting in configuration file.\n");
+    }
     
     config_destroy(cf);
 
@@ -301,6 +322,14 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     if (pam_get_authtok(pamh, PAM_AUTHTOK, &authtok, NULL) != PAM_SUCCESS || authtok == NULL || *authtok == '\0') {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get authtok");
         return PAM_AUTHINFO_UNAVAIL;
+    }
+
+    if (user_map_path != NULL) {
+        global_user_name = get_mapped_user(user_map_path, ct->value);
+        if (global_user_name != NULL) {
+            syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: found global user name for %s: %s", ct->value, global_user_name);
+            ct->value = global_user_name;
+        }
     }
 
     ct->key_len = strlen(ct->key);

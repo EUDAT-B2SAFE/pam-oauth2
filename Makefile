@@ -8,7 +8,10 @@ all: pam_oauth2.so
 jsmn/libjsmn.a:
 	$(MAKE) CFLAGS="$(CFLAGS)" -C jsmn
 
-pam_oauth2.so: pam_oauth2.o jsmn/libjsmn.a
+parson/libparson.a:
+	$(MAKE) CFLAGS="$(CFLAGS)" -C parson
+
+pam_oauth2.so: pam_oauth2.o jsmn/libjsmn.a parson/libparson.a
 	$(CC) -shared $^ -lcurl -lconfig -o $@
 
 install: pam_oauth2.so

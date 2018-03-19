@@ -1,3 +1,6 @@
 [submodule "jsmn"]
 	path = jsmn
 	url = git://github.com/zserge/jsmn.git
+[submodule "parson"]
+	path = parson
+	url = https://github.com/kgabis/parson.git
