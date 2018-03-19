@@ -11,6 +11,7 @@ $ sudo yum install openssl-devel pam-devel libcurl-devel libconfig-devel
 $ git clone <current project>
 $ git submodule init
 $ git submodule update
+$ cp utilities/Makefile parson/Makefile
 $ make
 $ sudo make install
 ```
@@ -110,7 +111,34 @@ And in iRODS server log:
 Authenticated
 Mar  2 13:46:16 pid:9327 NOTICE: writeLine: inString = [pep_auth_agent_auth_response_pre] USER CONNECTION INFORMATION -:- auth_scheme: native, client_addr: 127.0.0.1, proxy_rods_zone: cinecaDevel1, proxy_user_name: claudio, user_rods_zone: cinecaDevel1, user_user_name: claudio
 ```
-
+### User mapping
+If we want to have the OAuth2 username decoupled by the local iRODS username, we need a mapping between the OAuth2 user and the iRODS user. If in the pam configuration file /etc/irods/pam.conf there is the following line:
+```
+# path to user map file
+user_map_file = "/etc/irods/user_map.json"
+```
+where the user_map.json is:
+```
+{
+  "claudio" :"roberto"
+}
+```
+And in the /etc/pam.d/irods, the next lines:
+```
+auth requisite pam_oauth2.so /etc/irods/pam.conf
+auth required pam_exec.so debug /etc/irods/account_manager.sh
+```
+Where the file account_manager.sh is a shell script based on iRODS icommand client and it can be found in the utilities folder of the current project.  
+Then the OAuth2 user "roberto" is mapped into the iRODS user "claudio".  
+And I got:
+```
+pam_oauth2: successfully authenticated 'roberto'
+```
+but at the same time:
+```
+Authenticated
+Mar 18 11:58:29 pid:1456 NOTICE: writeLine: inString = [pep_auth_agent_auth_response_pre] USER CONNECTION INFORMATION -:- auth_scheme: native, client_addr: 127.0.0.1, proxy_rods_zone: cinecaDevel1, proxy_user_name: claudio, user_rods_zone: cinecaDevel1, user_user_name: claudio
+```
 License
 -------
 
