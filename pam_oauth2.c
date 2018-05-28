@@ -92,7 +92,7 @@ static int check_response(const struct response token_info, struct check_tokens 
   /* Assume the top-level element is an object */
   if (r-- < 1 || t[0].type != JSMN_OBJECT)
   {
-    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: tokeninfo response: JSON Object expected");
+    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: tokeninfo response: JSON Object expected %s\n", token_info.ptr);
     return PAM_AUTHINFO_UNAVAIL;
   }
 
@@ -182,8 +182,8 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
     return ret;
   }
 
-  char *pUserPass;
-  char *postData;
+  /*  char *pUserPass; */
+  /* char *postData; */
   char *bearer;
 
   if ((bearer = malloc(strlen("Authorization: Bearer ") + strlen(authtok) + 1)))
@@ -191,16 +191,19 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
     bearer = strcpy(bearer, "Authorization: Bearer ");  
     strcat(bearer, authtok);
 
-    curl_easy_setopt(hnd, CURLOPT_CUSTOMREQUEST, "GET");
-    curl_easy_setopt(hnd, CURLOPT_URL, tokeninfo_url);
+    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: bearer %s\n", bearer);
+    curl_easy_setopt(session, CURLOPT_CUSTOMREQUEST, "GET");
+    curl_easy_setopt(session, CURLOPT_URL, tokeninfo_url);
+    curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, writefunc);
+    curl_easy_setopt(session, CURLOPT_WRITEDATA, token_info);
 
     struct curl_slist *headers = NULL;
-    // headers = curl_slist_append(headers, "Postman-Token: 5079ee8b-9734-4a19-b422-074ab1ffcc1d");
+    /* headers = curl_slist_append(headers, "Postman-Token: 5079ee8b-9734-4a19-b422-074ab1ffcc1d"); */
     headers = curl_slist_append(headers, "Cache-Control: no-cache");
     headers = curl_slist_append(headers, bearer);
     headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
-    curl_easy_setopt(hnd, CURLOPT_HTTPHEADER, headers);
-    // curl_easy_setopt(hnd, CURLOPT_POSTFIELDS, "token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiOWJjNDhmMTktN2M5Yy00YTk0LTlhNzEtYmVjOTUyMjZmOWRhIiwianRpIjoiNzI0YmJjYmYtNDE0My00ZjE1LTk5M2MtZGZmNTg2MWY4MjU3In0.u5BCjrkHMpS9SocDi9SAMKh0_sjrw0tav0rDX9uROaM");
+    curl_easy_setopt(session, CURLOPT_HTTPHEADER, headers);
+    /* curl_easy_setopt(session, CURLOPT_POSTFIELDS, "token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiOWJjNDhmMTktN2M5Yy00YTk0LTlhNzEtYmVjOTUyMjZmOWRhIiwianRpIjoiNzI0YmJjYmYtNDE0My00ZjE1LTk5M2MtZGZmNTg2MWY4MjU3In0.u5BCjrkHMpS9SocDi9SAMKh0_sjrw0tav0rDX9uROaM"); */
   
     res = curl_easy_perform(session);
     if (res == CURLE_OK &&
@@ -213,7 +216,7 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
       syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: curl request failed: %s\n", curl_easy_strerror(res));
     }
 
-    free(postData);
+    /* free(postData); */
   }
   else
   {
@@ -319,6 +322,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     syslog(LOG_AUTH | LOG_DEBUG, "No 'token_validation_ep' setting in configuration file.\n");
     return PAM_AUTHINFO_UNAVAIL;
   }
+  
   if (config_lookup_string(cf, "login_field", &login_field))
   {
     username_attribute = malloc(strlen(login_field) + 1);
@@ -329,7 +333,8 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
   {
     syslog(LOG_AUTH | LOG_DEBUG, "No 'username_attribute' setting in configuration file.\n");
     return PAM_AUTHINFO_UNAVAIL;
-  }
+  } 
+
   if (config_lookup_string(cf, "oauth2_client_username", &oauth2_client_username))
   {
     client_username = malloc(strlen(oauth2_client_username) + 1);
@@ -368,6 +373,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 
   /*    if (argc > 0) tokeninfo_url = argv[0]; */
   /*    if (argc > 1) ct[0].key = argv[1]; */
+
   ct[0].key = username_attribute;
 
   if (tokeninfo_url == NULL || *tokeninfo_url == '\0')
