@@ -5,8 +5,11 @@
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
 #include <libconfig.h>
-#include "jsmn/jsmn.h"
 #include "parson/parson.h"
+
+
+static const int MAX_MAPPING_ARRAY_SIZE = 100;
+static const int MAX_MAPPING_ITEM_SIZE = 50;
 
 struct response
 {
@@ -14,14 +17,6 @@ struct response
   size_t len;
 };
 
-struct check_tokens
-{
-  const char *key;
-  int key_len;
-  const char *value;
-  int value_len;
-  int match;
-};
 
 static size_t writefunc(void *ptr, size_t size, size_t nmemb, struct response *r)
 {
@@ -43,133 +38,43 @@ static size_t writefunc(void *ptr, size_t size, size_t nmemb, struct response *r
   return data_size;
 }
 
-static int skip_object(const jsmntok_t *t, const int count)
+static int check_response(const struct response token_info, char (*map_user_list) [MAX_MAPPING_ITEM_SIZE],
+                          const char *const username_attribute)
 {
-  int i;
-  if (count <= 0)
-    return 0; /* should not happen */
+  int match = 0;
+  int r = PAM_AUTH_ERR;
+  size_t i = 0;
+  const char *name = NULL;  
+  const char *const response_data = token_info.ptr;
 
-  if (t->type == JSMN_PRIMITIVE || t->type == JSMN_STRING)
-  {
-    return 1;
-  }
-  else if (t->type == JSMN_OBJECT)
-  {
-    int ret = 1;
-    for (i = 0; i < t->size; ++i)
+  JSON_Value *schema = json_parse_string(response_data);
+  name = json_object_get_string(json_object(schema), username_attribute);
+  syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: user email returned by B2ACCESS: %s\n", name);
+
+  for ( i = 0; i < sizeof(map_user_list); i++) {
+    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: check if %s is equal to %s\n\n", name, map_user_list[i]);
+    if (strncmp(name, map_user_list[i], strlen(map_user_list[i])) == 0) 
     {
-      ret += skip_object(t + ret, count - ret);
-      ret += skip_object(t + ret, count - ret);
+      match = 1;
+      break;
     }
-    return ret;
   }
-  else if (t->type == JSMN_ARRAY)
+
+  
+  if (match == 1) 
   {
-    int ret = 1;
-    for (i = 0; i < t->size; ++i)
-      ret += skip_object(t + ret, count - ret);
-    return ret;
+    r = PAM_SUCCESS;
+    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: successfully authenticated by B2ACCESS: %s\n", name);
   }
   else
-    return 0;
-}
-
-static int check_response(const struct response token_info, struct check_tokens *ct)
-{
-  const char *const response_data = token_info.ptr;
-  struct check_tokens *cti;
-  int r, i = 1;
-  jsmn_parser p;
-  jsmntok_t t[128]; /* We expect no more than 128 tokens */
-
-  jsmn_init(&p);
-  if ((r = jsmn_parse(&p, response_data, token_info.len, t, sizeof(t) / sizeof(t[0]))) < 0)
   {
-    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: Failed to parse tokeninfo JSON response");
-    return PAM_AUTHINFO_UNAVAIL;
-  }
-
-  /* Assume the top-level element is an object */
-  if (r-- < 1 || t[0].type != JSMN_OBJECT)
-  {
-    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: tokeninfo response: JSON Object expected %s\n", token_info.ptr);
-    return PAM_AUTHINFO_UNAVAIL;
-  }
-
-  while (r > 0)
-  {
-    if (t[i].type == JSMN_STRING)
-    {
-      --r;
-      /* try to find "interesting" keys in the top-level element object */
-      for (cti = ct; cti->key != NULL; ++cti)
-      {
-        if (cti->key_len == t[i].end - t[i].start &&
-            strncmp(response_data + t[i].start, cti->key, cti->key_len) == 0)
-        {
-          ++i;
-          if (t[i].type == JSMN_STRING && cti->value_len == t[i].end - t[i].start &&
-              strncmp(response_data + t[i].start, cti->value, cti->value_len) == 0)
-          {
-            ++i;
-            --r;
-            cti->match = 1;
-            break;
-          }
-          else
-          {
-            syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: '%.*s' value doesn't meet expectation: '%.*s' != '%.*s'",
-                   cti->key_len, cti->key, t[i].end - t[i].start, response_data + t[i].start, cti->value_len, cti->value);
-            return PAM_AUTH_ERR;
-          }
-        }
-      }
-
-      /* skip value, because key was not interesting for us */
-      if (cti->key == NULL)
-      {
-        int skipped = skip_object(t + ++i, r);
-        r -= skipped;
-        i += skipped;
-      }
-    }
-    else
-    {
-      int skipped = skip_object(t + i, r);
-      r -= skipped;
-      i += skipped;
-      skipped = skip_object(t + i, r);
-      r -= skipped;
-      i += skipped;
-    }
-  }
-
-  r = PAM_SUCCESS;
-  for (cti = ct; cti->key != NULL; ++cti)
-  {
-    if (cti->match == 0)
-    {
-      syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: can't find '%.*s' field in the tokeninfo JSON response object",
-             cti->key_len, cti->key);
-      if (cti == ct)
-      { /* login token field always come first */
-        r = PAM_USER_UNKNOWN;
-      }
-      else if (r != PAM_USER_UNKNOWN)
-      {
-        r = PAM_AUTH_ERR;
-      }
-    }
-  }
-
-  if (r == PAM_SUCCESS)
-    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: successfully authenticated '%.*s'", ct->value_len, ct->value);
-
+   syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: authenticated failed for user: %s\n", name); 
+  } 
+ 
   return r;
 }
 
 static int query_token_info(const char *const tokeninfo_url, const char *const authtok,
-                            const char *const client_username, const char *const client_password,
                             long *response_code, struct response *token_info)
 {
   int ret = 1;
@@ -229,8 +134,7 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
 }
 
 static int oauth2_authenticate(const char *const tokeninfo_url, const char *const authtok,
-                               struct check_tokens *ct, const char *const client_username,
-                               const char *const client_password)
+                               char (*map_user_list) [MAX_MAPPING_ITEM_SIZE], const char *const username_attribute)
 {
   struct response token_info;
   long response_code = 0;
@@ -243,14 +147,13 @@ static int oauth2_authenticate(const char *const tokeninfo_url, const char *cons
   }
   token_info.ptr[token_info.len = 0] = '\0';
 
-  if (query_token_info(tokeninfo_url, authtok, client_username, client_password,
-                       &response_code, &token_info) != 0)
+  if (query_token_info(tokeninfo_url, authtok, &response_code, &token_info) != 0)
   {
     ret = PAM_AUTHINFO_UNAVAIL;
   }
   else if (response_code == 200)
   {
-    ret = check_response(token_info, ct);
+    ret = check_response(token_info, map_user_list, username_attribute);
   }
   else
   {
@@ -263,20 +166,25 @@ static int oauth2_authenticate(const char *const tokeninfo_url, const char *cons
   return ret;
 }
 
-static char *get_mapped_user(const char *filename, const char *user_key)
+static char **get_mapped_user(const char *filename, const char *user_key,
+                              char (*map) [MAX_MAPPING_ITEM_SIZE])
 {
   const char *name = NULL;
   char *username = NULL;
+  JSON_Array *array;
+  size_t i;
 
   syslog(LOG_AUTH | LOG_DEBUG, "Searching for user: %s\n\n", user_key);
   JSON_Value *user_map = json_parse_file(filename);
-  name = json_object_get_string(json_object(user_map), user_key);
-  syslog(LOG_AUTH | LOG_DEBUG, "Mapped user: %s\n\n", name);
-  username = malloc(strlen(name) + 1);
-  strcpy(username, name);
+  array = json_object_get_array(json_object(user_map), user_key);
+  if (array != NULL) {
+    for ( i = 0; i < json_array_get_count(array); i++) {
+      syslog(LOG_AUTH | LOG_DEBUG, "Found email mapping: %s\n\n", json_array_get_string(array, i));
+      strcpy(map[i], json_array_get_string(array, i));
+     }
+  }
+  
   json_value_free(user_map);
-
-  return username;
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
@@ -285,10 +193,9 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
   char *tokeninfo_url = NULL;
   char *username_attribute = NULL;
   char *client_username = NULL, *client_password = NULL;
-  char *user_map_path = NULL, *global_user_name = NULL;
-  struct check_tokens ct[argc];
-  int i, ct_len = 1;
-  ct->key = ct->value = NULL;
+  char *user_map_path = NULL;
+  const char *irods_user = NULL;
+  char map_user_list[MAX_MAPPING_ARRAY_SIZE][MAX_MAPPING_ITEM_SIZE];
   config_t cfg, *cf;
   const char *config_path;
   const char *token_validation_ep;
@@ -346,6 +253,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     syslog(LOG_AUTH | LOG_DEBUG, "No 'client_username' setting in configuration file.\n");
     return PAM_AUTHINFO_UNAVAIL;
   }
+
   if (config_lookup_string(cf, "oauth2_client_password", &oauth2_client_password))
   {
     client_password = malloc(strlen(oauth2_client_password) + 1);
@@ -374,7 +282,6 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
   /*    if (argc > 0) tokeninfo_url = argv[0]; */
   /*    if (argc > 1) ct[0].key = argv[1]; */
 
-  ct[0].key = username_attribute;
 
   if (tokeninfo_url == NULL || *tokeninfo_url == '\0')
   {
@@ -382,13 +289,13 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     return PAM_AUTHINFO_UNAVAIL;
   }
 
-  if (ct->key == NULL || *ct->key == '\0')
+  if (username_attribute == NULL || *username_attribute == '\0')
   {
     syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: login_field is not defined or empty");
     return PAM_AUTHINFO_UNAVAIL;
   }
 
-  if (pam_get_user(pamh, &ct->value, NULL) != PAM_SUCCESS || ct->value == NULL || *ct->value == '\0')
+  if (pam_get_user(pamh, &irods_user, NULL) != PAM_SUCCESS || irods_user == NULL || *irods_user == '\0')
   {
     syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: can't get user login");
     return PAM_AUTHINFO_UNAVAIL;
@@ -402,33 +309,15 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 
   if (user_map_path != NULL)
   {
-    global_user_name = get_mapped_user(user_map_path, ct->value);
-    if (global_user_name != NULL)
+    get_mapped_user(user_map_path, irods_user, &map_user_list);
+    if (map_user_list != NULL)
     {
-      syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: found global user name for %s: %s", ct->value, global_user_name);
-      ct->value = global_user_name;
+      syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: Found email mapping for user %s\n\n", irods_user);
     }
   }
 
-  ct->key_len = strlen(ct->key);
-  ct->value_len = strlen(ct->value);
-  ct->match = 0;
 
-  for (i = 2; i < argc; ++i)
-  {
-    const char *value = strchr(argv[i], '=');
-    if (value != NULL)
-    {
-      ct[ct_len].key = argv[i];
-      ct[ct_len].key_len = value - argv[i];
-      ct[ct_len].value = value + 1;
-      ct[ct_len].value_len = strlen(value + 1);
-      ct[ct_len++].match = 0;
-    }
-  }
-  ct[ct_len].key = NULL;
-
-  return oauth2_authenticate(tokeninfo_url, authtok, ct, client_username, client_password);
+  return oauth2_authenticate(tokeninfo_url, authtok, map_user_list, username_attribute);
 }
 
 PAM_EXTERN int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
