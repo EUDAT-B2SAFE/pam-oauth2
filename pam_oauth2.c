@@ -38,7 +38,7 @@ static size_t writefunc(void *ptr, size_t size, size_t nmemb, struct response *r
   return data_size;
 }
 
-static int check_response(const struct response token_info, char (*map_user_list) [MAX_MAPPING_ITEM_SIZE],
+static int check_response(const struct response token_info, char (*map_user_array) [MAX_MAPPING_ITEM_SIZE],
                           const char *const username_attribute)
 {
   int match = 0;
@@ -49,12 +49,12 @@ static int check_response(const struct response token_info, char (*map_user_list
 
   JSON_Value *schema = json_parse_string(response_data);
   name = json_object_get_string(json_object(schema), username_attribute);
-  syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: user email returned by B2ACCESS: %s\n", name);
+  syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: user mapping item returned by B2ACCESS: %s\n", name);
 
-  for ( i = 0; i < sizeof(map_user_list); i++) {
-    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: check if %s is equal to %s\n\n", name, map_user_list[i]);
-    if (strncmp(name, map_user_list[i], strlen(map_user_list[i])) == 0) 
+  for ( i = 0; i < sizeof(map_user_array); i++) {
+    if (strncmp(name, map_user_array[i], strlen(map_user_array[i])) == 0) 
     {
+      syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: succesfully mapped item %s to local iRODS user\n\n", map_user_array[i]);
       match = 1;
       break;
     }
@@ -64,7 +64,7 @@ static int check_response(const struct response token_info, char (*map_user_list
   if (match == 1) 
   {
     r = PAM_SUCCESS;
-    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: successfully authenticated by B2ACCESS: %s\n", name);
+    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: successfully authenticated by B2ACCESS\n");
   }
   else
   {
@@ -77,6 +77,8 @@ static int check_response(const struct response token_info, char (*map_user_list
 static int query_token_info(const char *const tokeninfo_url, const char *const authtok,
                             long *response_code, struct response *token_info)
 {
+  char *bearer;
+  struct curl_slist *headers = NULL;
   int ret = 1;
   CURLcode res;
   CURL *session = curl_easy_init();
@@ -87,22 +89,19 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
     return ret;
   }
 
-  /*  char *pUserPass; */
-  /* char *postData; */
-  char *bearer;
+
 
   if ((bearer = malloc(strlen("Authorization: Bearer ") + strlen(authtok) + 1)))
   {
     bearer = strcpy(bearer, "Authorization: Bearer ");  
     strcat(bearer, authtok);
 
-    syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: bearer %s\n", bearer);
     curl_easy_setopt(session, CURLOPT_CUSTOMREQUEST, "GET");
     curl_easy_setopt(session, CURLOPT_URL, tokeninfo_url);
     curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, writefunc);
     curl_easy_setopt(session, CURLOPT_WRITEDATA, token_info);
 
-    struct curl_slist *headers = NULL;
+
     /* headers = curl_slist_append(headers, "Postman-Token: 5079ee8b-9734-4a19-b422-074ab1ffcc1d"); */
     headers = curl_slist_append(headers, "Cache-Control: no-cache");
     headers = curl_slist_append(headers, bearer);
@@ -134,7 +133,7 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
 }
 
 static int oauth2_authenticate(const char *const tokeninfo_url, const char *const authtok,
-                               char (*map_user_list) [MAX_MAPPING_ITEM_SIZE], const char *const username_attribute)
+                               char (*map_user_array) [MAX_MAPPING_ITEM_SIZE], const char *const username_attribute)
 {
   struct response token_info;
   long response_code = 0;
@@ -153,7 +152,7 @@ static int oauth2_authenticate(const char *const tokeninfo_url, const char *cons
   }
   else if (response_code == 200)
   {
-    ret = check_response(token_info, map_user_list, username_attribute);
+    ret = check_response(token_info, map_user_array, username_attribute);
   }
   else
   {
@@ -166,20 +165,19 @@ static int oauth2_authenticate(const char *const tokeninfo_url, const char *cons
   return ret;
 }
 
-static char **get_mapped_user(const char *filename, const char *user_key,
+static void get_mapped_user(const char *filename, const char *user_key,
                               char (*map) [MAX_MAPPING_ITEM_SIZE])
 {
-  const char *name = NULL;
-  char *username = NULL;
   JSON_Array *array;
+  JSON_Value *user_map;
   size_t i;
 
   syslog(LOG_AUTH | LOG_DEBUG, "Searching for user: %s\n\n", user_key);
-  JSON_Value *user_map = json_parse_file(filename);
+  user_map = json_parse_file(filename);
   array = json_object_get_array(json_object(user_map), user_key);
   if (array != NULL) {
     for ( i = 0; i < json_array_get_count(array); i++) {
-      syslog(LOG_AUTH | LOG_DEBUG, "Found email mapping: %s\n\n", json_array_get_string(array, i));
+      syslog(LOG_AUTH | LOG_DEBUG, "Found local mapping item: %s\n\n", json_array_get_string(array, i));
       strcpy(map[i], json_array_get_string(array, i));
      }
   }
@@ -192,16 +190,13 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
   const char *authtok = NULL;
   char *tokeninfo_url = NULL;
   char *username_attribute = NULL;
-  char *client_username = NULL, *client_password = NULL;
   char *user_map_path = NULL;
   const char *irods_user = NULL;
-  char map_user_list[MAX_MAPPING_ARRAY_SIZE][MAX_MAPPING_ITEM_SIZE];
+  char map_user_array[MAX_MAPPING_ARRAY_SIZE][MAX_MAPPING_ITEM_SIZE];
   config_t cfg, *cf;
   const char *config_path;
   const char *token_validation_ep;
   const char *login_field;
-  const char *oauth2_client_username;
-  const char *oauth2_client_password;
   const char *user_map_file;
 
   if (argc > 0)
@@ -242,29 +237,6 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     return PAM_AUTHINFO_UNAVAIL;
   } 
 
-  if (config_lookup_string(cf, "oauth2_client_username", &oauth2_client_username))
-  {
-    client_username = malloc(strlen(oauth2_client_username) + 1);
-    strcpy(client_username, oauth2_client_username);
-    syslog(LOG_AUTH | LOG_DEBUG, "client_username: %s\n\n", client_username);
-  }
-  else
-  {
-    syslog(LOG_AUTH | LOG_DEBUG, "No 'client_username' setting in configuration file.\n");
-    return PAM_AUTHINFO_UNAVAIL;
-  }
-
-  if (config_lookup_string(cf, "oauth2_client_password", &oauth2_client_password))
-  {
-    client_password = malloc(strlen(oauth2_client_password) + 1);
-    strcpy(client_password, oauth2_client_password);
-    syslog(LOG_AUTH | LOG_DEBUG, "client_password: %s\n\n", client_password);
-  }
-  else
-  {
-    syslog(LOG_AUTH | LOG_DEBUG, "No 'client_password' setting in configuration file.\n");
-    return PAM_AUTHINFO_UNAVAIL;
-  }
   if (config_lookup_string(cf, "user_map_file", &user_map_file))
   {
     user_map_path = malloc(strlen(user_map_file) + 1);
@@ -309,15 +281,14 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 
   if (user_map_path != NULL)
   {
-    get_mapped_user(user_map_path, irods_user, &map_user_list);
-    if (map_user_list != NULL)
+    get_mapped_user(user_map_path, irods_user, map_user_array);
+    if (map_user_array != NULL)
     {
-      syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: Found email mapping for user %s\n\n", irods_user);
+      syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: Found user mapping array for user %s\n\n", irods_user);
     }
   }
 
-
-  return oauth2_authenticate(tokeninfo_url, authtok, map_user_list, username_attribute);
+  return oauth2_authenticate(tokeninfo_url, authtok, map_user_array, username_attribute);
 }
 
 PAM_EXTERN int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
