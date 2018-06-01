@@ -52,7 +52,7 @@ static int check_response(const struct response token_info, char (*map_user_arra
   syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: user mapping item returned by B2ACCESS: %s\n", name);
 
   for ( i = 0; i < sizeof(map_user_array); i++) {
-    if (strncmp(name, map_user_array[i], strlen(map_user_array[i])) == 0) 
+    if (strncmp(name, map_user_array[i], strlen(name)) == 0) 
     {
       syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: succesfully mapped item %s to local iRODS user\n\n", map_user_array[i]);
       match = 1;
@@ -67,7 +67,7 @@ static int check_response(const struct response token_info, char (*map_user_arra
   }
   else
   {
-   syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: authenticated failed for user: %s\n", name); 
+   syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: user matching failed for user: %s\n", name); 
   } 
  
   return r;
