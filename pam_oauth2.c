@@ -244,10 +244,6 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 
   config_destroy(cf);
 
-  /*    if (argc > 0) tokeninfo_url = argv[0]; */
-  /*    if (argc > 1) ct[0].key = argv[1]; */
-
-
   if (tokeninfo_url == NULL || *tokeninfo_url == '\0')
   {
     syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: tokeninfo_url is not defined or invalid");
