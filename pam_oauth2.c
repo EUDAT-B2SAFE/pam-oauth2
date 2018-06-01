@@ -60,7 +60,6 @@ static int check_response(const struct response token_info, char (*map_user_arra
     }
   }
 
-  
   if (match == 1) 
   {
     r = PAM_SUCCESS;
@@ -89,8 +88,6 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
     return ret;
   }
 
-
-
   if ((bearer = malloc(strlen("Authorization: Bearer ") + strlen(authtok) + 1)))
   {
     bearer = strcpy(bearer, "Authorization: Bearer ");  
@@ -101,13 +98,10 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
     curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, writefunc);
     curl_easy_setopt(session, CURLOPT_WRITEDATA, token_info);
 
-
-    /* headers = curl_slist_append(headers, "Postman-Token: 5079ee8b-9734-4a19-b422-074ab1ffcc1d"); */
     headers = curl_slist_append(headers, "Cache-Control: no-cache");
     headers = curl_slist_append(headers, bearer);
     headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
     curl_easy_setopt(session, CURLOPT_HTTPHEADER, headers);
-    /* curl_easy_setopt(session, CURLOPT_POSTFIELDS, "token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiOWJjNDhmMTktN2M5Yy00YTk0LTlhNzEtYmVjOTUyMjZmOWRhIiwianRpIjoiNzI0YmJjYmYtNDE0My00ZjE1LTk5M2MtZGZmNTg2MWY4MjU3In0.u5BCjrkHMpS9SocDi9SAMKh0_sjrw0tav0rDX9uROaM"); */
   
     res = curl_easy_perform(session);
     if (res == CURLE_OK &&
@@ -119,8 +113,6 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
     {
       syslog(LOG_AUTH | LOG_DEBUG, "pam_oauth2: curl request failed: %s\n", curl_easy_strerror(res));
     }
-
-    /* free(postData); */
   }
   else
   {
@@ -133,7 +125,8 @@ static int query_token_info(const char *const tokeninfo_url, const char *const a
 }
 
 static int oauth2_authenticate(const char *const tokeninfo_url, const char *const authtok,
-                               char (*map_user_array) [MAX_MAPPING_ITEM_SIZE], const char *const username_attribute)
+                               char (*map_user_array) [MAX_MAPPING_ITEM_SIZE], 
+                               const char *const username_attribute)
 {
   struct response token_info;
   long response_code = 0;
