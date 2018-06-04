@@ -33,24 +33,23 @@ And the configuration file /etc/irods/pam.conf looks like this:
 
 ```
 #OAuth2 url for token validation
-token_validation_ep = "https://localhost:9443/oauth2/introspect"
+token_validation_ep = "https://b2access-integration.fz-juelich.de:443/oauth2/userinfo"
 #OAuth2 attribute key to identify the attribute in the response used to match the login username
-login_field = "scope"
-#Oauth2 client (application) credential username
-oauth2_client_username = "admin"
-#Oauth2 client (application) credential password
-oauth2_client_password = "admin"
+login_field = "email"
+# path to user map file
+user_map_file = "/etc/irods/user_map.json"
 ```
 
 And somebody is trying to login with login=foo and password=bar.
 
-pam\_oauth2 module will make a POST http request to https://localhost:9443/oauth2/introspect and check response code and content.
+pam\_oauth2 module will make an http request to https://b2access-integration.fz-juelich.de:443/oauth2/userinfo passing the "bar" value and check response code and content.
 
-If the response code is not 200 - authentication will fail. After that it will check response content:
+If the response code is not 200 - authentication will fail. 
+If response code is 200 the response content is parsed and the value of the property "email" is used to identify the user:
 
 ```json
 {
-  "scope":"claudio",
+  "email":"roberto@email.com",
   "active":true,
   "token_type":"Bearer",
   "exp":1520001942,
@@ -60,13 +59,25 @@ If the response code is not 200 - authentication will fail. After that it will c
 }
 ```
 
-It will check that response is a valid JSON object and top-level object contains following key-value pairs:
-```json
-  "scope": "foo",
-  "active": "true"
-```
+To successfully authenticate the user and map it to a valid iRODS one, the value "roberto@email.com" must be associated to an iRODS username in the user_map_file, as explained in the next session.
 
-If some keys haven't been found or values don't match with expectation - authentication will fail.
+
+### User mapping
+If we want to have the OAuth2 username decoupled from the local iRODS username, we need a mapping between the OAuth2 users and the iRODS users. In the pam configuration file /etc/irods/pam.conf must be specified the path to the map file:
+```
+# path to user map file
+user_map_file = "/etc/irods/user_map.json"
+```
+where the user_map.json is, for instance (note that an array is need also for a single email value):
+```json
+{
+  "roberto": ["roberto@email.it", "r.mucci@email.it"],
+  "claudio": ["c.cacc@email.com", "claudio@email.it", "c.cacciari@email.it"],
+  "paolo": ["paolo@email.com"]
+}
+```
+The user_map.json maps the OAuth2 user "roberto@email.com" to the local iRODS user "roberto".
+
 
 ## How it works with iRODS
 
@@ -111,34 +122,7 @@ And in iRODS server log:
 Authenticated
 Mar  2 13:46:16 pid:9327 NOTICE: writeLine: inString = [pep_auth_agent_auth_response_pre] USER CONNECTION INFORMATION -:- auth_scheme: native, client_addr: 127.0.0.1, proxy_rods_zone: cinecaDevel1, proxy_user_name: claudio, user_rods_zone: cinecaDevel1, user_user_name: claudio
 ```
-### User mapping
-If we want to have the OAuth2 username decoupled by the local iRODS username, we need a mapping between the OAuth2 user and the iRODS user. If in the pam configuration file /etc/irods/pam.conf there is the following line:
-```
-# path to user map file
-user_map_file = "/etc/irods/user_map.json"
-```
-where the user_map.json is:
-```
-{
-  "claudio" :"roberto"
-}
-```
-And in the /etc/pam.d/irods, the next lines:
-```
-auth requisite pam_oauth2.so /etc/irods/pam.conf
-auth required pam_exec.so debug /etc/irods/account_manager.sh
-```
-Where the file account_manager.sh is a shell script based on iRODS icommand client and it can be found in the utilities folder of the current project.  
-Then the OAuth2 user "roberto" is mapped into the iRODS user "claudio".  
-And I got:
-```
-pam_oauth2: successfully authenticated 'roberto'
-```
-but at the same time:
-```
-Authenticated
-Mar 18 11:58:29 pid:1456 NOTICE: writeLine: inString = [pep_auth_agent_auth_response_pre] USER CONNECTION INFORMATION -:- auth_scheme: native, client_addr: 127.0.0.1, proxy_rods_zone: cinecaDevel1, proxy_user_name: claudio, user_rods_zone: cinecaDevel1, user_user_name: claudio
-```
+
 License
 -------
 
