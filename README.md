@@ -59,11 +59,11 @@ If response code is 200 the response content is parsed and the value of the prop
 }
 ```
 
-To successfully authenticate the user and map it to a valid iRODS one, the value "roberto@email.com" must be associated to an iRODS username in the user_map_file, as explained in the next session.
+To successfully authenticate the user and map it to a valid iRODS one, the value "roberto@email.com" must be associated to the current iRODS username in the user_map_file, as explained in the next session.
 
 
 ### User mapping
-If we want to have the OAuth2 username decoupled from the local iRODS username, we need a mapping between the OAuth2 users and the iRODS users. In the pam configuration file /etc/irods/pam.conf must be specified the path to the map file:
+If we want to have the OAuth2 username decoupled from the local iRODS username, we need a mapping between the OAuth2 user and the iRODS user. In the pam configuration file /etc/irods/pam.conf must be specified the path to the map file:
 ```
 # path to user map file
 user_map_file = "/etc/irods/user_map.json"
@@ -76,7 +76,7 @@ where the user_map.json is, for instance (note that an array is need also for a 
   "paolo": ["paolo@email.com"]
 }
 ```
-The user_map.json maps the OAuth2 user "roberto@email.com" to the local iRODS user "roberto".
+When the iRODS user "roberto" performs an "iinit", the pam-oauth2 module gets the email array associated to "roberto" (```["roberto@email.it", "r.mucci@email.it"]```). Only if the the email returned by B2ACCESS ("roberto@email.it") appears in the email array the user is successfully authenticated. 
 
 
 ## How it works with iRODS
@@ -108,11 +108,16 @@ Enter your current PAM password:
 And if it works, it is possible to see in the syslog debug log:
 
 ```
-Mar  2 13:46:13 localhost irodsPamAuthCheck: Token validation EP: https://localhost:9443/oauth2/introspect
-Mar  2 13:46:13 localhost irodsPamAuthCheck: username_attribute: scope
-Mar  2 13:46:13 localhost irodsPamAuthCheck: client_username: admin
-Mar  2 13:46:13 localhost irodsPamAuthCheck: client_password: admin
-Mar  2 13:46:13 localhost irodsPamAuthCheck: pam_oauth2: successfully authenticated 'claudio'
+Token validation EP: https://b2access-integration.fz-juelich.de:443/oauth2/userinfo
+Jun  1 09:26:34 localhost irodsPamAuthCheck: username_attribute: email
+Jun  1 09:26:34 localhost irodsPamAuthCheck: user_map_path: /etc/irods/user_map.json
+Jun  1 09:26:34 localhost irodsPamAuthCheck: Searching for user: roberto
+Jun  1 09:26:34 localhost irodsPamAuthCheck: Found local mapping item: roberto@email.it
+Jun  1 09:26:34 localhost irodsPamAuthCheck: Found local mapping item: r.mucci@email.it
+Jun  1 09:26:34 localhost irodsPamAuthCheck: pam_oauth2: Found user mapping array for user roberto
+Jun  1 09:26:34 localhost irodsPamAuthCheck: pam_oauth2: user mapping item returned by B2ACCESS: roberto@email.com
+Jun  1 09:26:34 localhost irodsPamAuthCheck: pam_oauth2: succesfully mapped item to local iRODS user
+Jun  1 09:26:34 localhost irodsPamAuthCheck: pam_oauth2: successfully authenticated by B2ACCESS
 ```
 
 And in iRODS server log:
