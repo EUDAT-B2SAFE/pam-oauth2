@@ -15,6 +15,10 @@ $ cp utilities/Makefile parson/Makefile
 $ make
 $ sudo make install
 ```
+Sometimes it is necessary also:
+```bash
+$ cp /lib/security/pam_oauth2.so /usr/lib64/security/
+```
 
 ## Configuration
 
